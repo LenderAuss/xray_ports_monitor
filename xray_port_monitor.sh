@@ -88,13 +88,12 @@ show_enhanced_traffic() {
     fi
     
     # Заголовок таблицы
-    printf "${BLUE}%-15s${NC} ${GREEN}%-8s${NC} ${YELLOW}%-12s${NC} ${MAGENTA}%-12s${NC} ${CYAN}%-12s${NC}\n" \
-        "Пользователь" "Порт" "Всего GB" "Уник. IP" "Акт. конн."
-    echo "────────────────────────────────────────────────────────────────────────────────"
+    printf "${BLUE}%-20s${NC} ${GREEN}%-10s${NC} ${YELLOW}%-15s${NC} ${MAGENTA}%-12s${NC}\n" \
+        "Пользователь" "Порт" "Всего GB" "Уник. IP"
+    echo "──────────────────────────────────────────────────────────────────────"
     
     local total_bytes=0
     local total_unique_ips=0
-    local total_connections=0
     
     # Массив для хранения данных (для сортировки)
     declare -a user_data
@@ -102,6 +101,11 @@ show_enhanced_traffic() {
     for i in "${!ports[@]}"; do
         local port="${ports[$i]}"
         local tag="${tags[$i]}"
+        
+        # Пропускаем main
+        if [ "$tag" = "main" ]; then
+            continue
+        fi
         
         local bytes_in=$(get_traffic_iptables "$port" "in")
         local bytes_out=$(get_traffic_iptables "$port" "out")
@@ -113,27 +117,25 @@ show_enhanced_traffic() {
         local total_gb=$(format_bytes_gb "$total")
         
         local unique_ips=$(get_unique_ips "$port")
-        local active_conns=$(get_active_connections "$port")
         
         total_bytes=$(echo "$total_bytes + $total" | bc 2>/dev/null || echo "0")
         total_unique_ips=$(echo "$total_unique_ips + $unique_ips" | bc 2>/dev/null || echo "0")
-        total_connections=$(echo "$total_connections + $active_conns" | bc 2>/dev/null || echo "0")
         
         # Цветной вывод в зависимости от активности
-        if [ "$active_conns" -gt 0 ]; then
-            printf "${GREEN}%-15s${NC} %-8s ${YELLOW}%-12s${NC} ${MAGENTA}%-12s${NC} ${CYAN}%-12s${NC}\n" \
-                "$tag" "$port" "$total_gb" "$unique_ips" "$active_conns"
+        if [ "$unique_ips" -gt 0 ]; then
+            printf "${GREEN}%-20s${NC} %-10s ${YELLOW}%-15s${NC} ${MAGENTA}%-12s${NC}\n" \
+                "$tag" "$port" "$total_gb" "$unique_ips"
         else
-            printf "%-15s %-8s %-12s %-12s %-12s\n" \
-                "$tag" "$port" "$total_gb" "$unique_ips" "$active_conns"
+            printf "%-20s %-10s %-15s %-12s\n" \
+                "$tag" "$port" "$total_gb" "$unique_ips"
         fi
     done
     
     # Итоговая строка
-    echo "────────────────────────────────────────────────────────────────────────────────"
+    echo "──────────────────────────────────────────────────────────────────────"
     local total_gb=$(format_bytes_gb "$total_bytes")
-    printf "${YELLOW}%-15s${NC} %-8s ${GREEN}%-12s${NC} ${MAGENTA}%-12s${NC} ${CYAN}%-12s${NC}\n" \
-        "ИТОГО:" "-" "$total_gb" "$total_unique_ips" "$total_connections"
+    printf "${YELLOW}%-20s${NC} %-10s ${GREEN}%-15s${NC} ${MAGENTA}%-12s${NC}\n" \
+        "ИТОГО:" "-" "$total_gb" "$total_unique_ips"
     echo ""
 }
 
@@ -152,9 +154,16 @@ export_json() {
     echo "  \"timestamp\": \"$timestamp\"," >> "$output_file"
     echo "  \"users\": [" >> "$output_file"
     
+    local first_item=true
+    
     for i in "${!ports[@]}"; do
         local port="${ports[$i]}"
         local tag="${tags[$i]}"
+        
+        # Пропускаем main
+        if [ "$tag" = "main" ]; then
+            continue
+        fi
         
         local bytes_in=$(get_traffic_iptables "$port" "in")
         local bytes_out=$(get_traffic_iptables "$port" "out")
@@ -166,22 +175,24 @@ export_json() {
         local total_gb=$(format_bytes_gb "$total")
         
         local unique_ips=$(get_unique_ips "$port")
-        local active_conns=$(get_active_connections "$port")
+        
+        # Добавляем запятую если не первый элемент
+        if [ "$first_item" = false ]; then
+            echo "    }," >> "$output_file"
+        fi
+        first_item=false
         
         echo "    {" >> "$output_file"
         echo "      \"user\": \"$tag\"," >> "$output_file"
         echo "      \"port\": $port," >> "$output_file"
         echo "      \"traffic_bytes\": $total," >> "$output_file"
         echo "      \"traffic_gb\": $total_gb," >> "$output_file"
-        echo "      \"unique_ips\": $unique_ips," >> "$output_file"
-        echo "      \"active_connections\": $active_conns" >> "$output_file"
-        
-        if [ $i -lt $((${#ports[@]} - 1)) ]; then
-            echo "    }," >> "$output_file"
-        else
-            echo "    }" >> "$output_file"
-        fi
+        echo "      \"unique_ips\": $unique_ips" >> "$output_file"
     done
+    
+    if [ "$first_item" = false ]; then
+        echo "    }" >> "$output_file"
+    fi
     
     echo "  ]" >> "$output_file"
     echo "}" >> "$output_file"
@@ -214,6 +225,11 @@ export_telegram_format() {
     for i in "${!ports[@]}"; do
         local port="${ports[$i]}"
         local tag="${tags[$i]}"
+        
+        # Пропускаем main
+        if [ "$tag" = "main" ]; then
+            continue
+        fi
         
         local bytes_in=$(get_traffic_iptables "$port" "in")
         local bytes_out=$(get_traffic_iptables "$port" "out")
@@ -248,7 +264,7 @@ export_enhanced_csv() {
     
     init_traffic_counters
     
-    echo "Timestamp,User,Port,Traffic_Bytes,Traffic_GB,Unique_IPs,Active_Connections" > "$filename"
+    echo "Timestamp,User,Port,Traffic_Bytes,Traffic_GB,Unique_IPs" > "$filename"
     
     local tags=($(jq -r '.inbounds[].tag' /usr/local/etc/xray/config.json))
     local ports=($(jq -r '.inbounds[].port' /usr/local/etc/xray/config.json))
@@ -257,6 +273,11 @@ export_enhanced_csv() {
     for i in "${!ports[@]}"; do
         local port="${ports[$i]}"
         local tag="${tags[$i]}"
+        
+        # Пропускаем main
+        if [ "$tag" = "main" ]; then
+            continue
+        fi
         
         local bytes_in=$(get_traffic_iptables "$port" "in")
         local bytes_out=$(get_traffic_iptables "$port" "out")
@@ -268,9 +289,8 @@ export_enhanced_csv() {
         local total_gb=$(format_bytes_gb "$total")
         
         local unique_ips=$(get_unique_ips "$port")
-        local active_conns=$(get_active_connections "$port")
         
-        echo "$timestamp,$tag,$port,$total,$total_gb,$unique_ips,$active_conns" >> "$filename"
+        echo "$timestamp,$tag,$port,$total,$total_gb,$unique_ips" >> "$filename"
     done
     
     echo -e "${GREEN}✓ Расширенный CSV экспортирован в $filename${NC}"
@@ -294,6 +314,11 @@ export_sql_inserts() {
         local port="${ports[$i]}"
         local tag="${tags[$i]}"
         
+        # Пропускаем main
+        if [ "$tag" = "main" ]; then
+            continue
+        fi
+        
         local bytes_in=$(get_traffic_iptables "$port" "in")
         local bytes_out=$(get_traffic_iptables "$port" "out")
         
@@ -304,9 +329,8 @@ export_sql_inserts() {
         local total_gb=$(format_bytes_gb "$total")
         
         local unique_ips=$(get_unique_ips "$port")
-        local active_conns=$(get_active_connections "$port")
         
-        echo "INSERT INTO $table_name (timestamp, username, port, traffic_bytes, traffic_gb, unique_ips, active_connections) VALUES ('$timestamp', '$tag', $port, $total, $total_gb, $unique_ips, $active_conns);"
+        echo "INSERT INTO $table_name (timestamp, username, port, traffic_bytes, traffic_gb, unique_ips) VALUES ('$timestamp', '$tag', $port, $total, $total_gb, $unique_ips);"
     done
     
     echo ""
@@ -330,6 +354,11 @@ show_detailed_report() {
         local port="${ports[$i]}"
         local tag="${tags[$i]}"
         
+        # Пропускаем main
+        if [ "$tag" = "main" ]; then
+            continue
+        fi
+        
         local bytes_in=$(get_traffic_iptables "$port" "in")
         local bytes_out=$(get_traffic_iptables "$port" "out")
         
@@ -340,16 +369,14 @@ show_detailed_report() {
         local total_gb=$(format_bytes_gb "$total")
         
         local unique_ips=$(get_unique_ips "$port")
-        local active_conns=$(get_active_connections "$port")
         
         echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo -e "${YELLOW}👤 Пользователь:${NC} $tag"
         echo -e "${BLUE}🔌 Порт:${NC} $port"
         echo -e "${MAGENTA}📊 Трафик:${NC} $total_gb GB"
         echo -e "${CYAN}🌐 Уникальных IP:${NC} $unique_ips"
-        echo -e "${GREEN}🔗 Активных соединений:${NC} $active_conns"
         
-        if [ "$active_conns" -gt 0 ]; then
+        if [ "$unique_ips" -gt 0 ]; then
             echo ""
             echo -e "${YELLOW}📍 Подключённые IP адреса:${NC}"
             ss -tn 2>/dev/null | grep ":$port " | grep ESTAB | awk '{print $5}' | sed 's/::ffff://g' | cut -d: -f1 | sort -u | while read ip; do
